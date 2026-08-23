@@ -1285,8 +1285,9 @@ int DLLEXPORT EN_setoption(EN_Project p, int option, double value)
         return 0;
     }
 
-    // All other option values must be non-negative
-    if (value < 0.0) return 213;
+    // All other option values must be non-negative, except negative bulk
+    // and tank reaction orders which select Michaelis-Menten kinetics.
+    if (value < 0.0 && option != EN_BULKORDER && option != EN_TANKORDER) return 213;
 
     // Process the specified option
     switch (option)
@@ -2894,7 +2895,7 @@ int DLLEXPORT EN_settankdata(EN_Project p, int index, double elev,
 
     int i, j, n, curveIndex = 0;
     double *Ucf = p->Ucf;
-    double area;
+    double area, minVolume;
     Stank *Tank = net->Tank;
     Scurve *curve;
 
@@ -2930,21 +2931,34 @@ int DLLEXPORT EN_settankdata(EN_Project p, int index, double elev,
     // Tank diameter supplied
     else area = PI * diam * diam / 4.0;
 
-    // Assign parameters to tank object
+    // Assign parameters to tank object using the same arithmetic path as
+    // input-file parsing so equivalent tank data produces identical internal
+    // state and event timing.
     net->Node[Tank[j].Node].El = elev / Ucf[ELEV];
-    Tank[j].A = area / Ucf[ELEV] / Ucf[ELEV];
-    Tank[j].H0 = (elev + initlvl) / Ucf[ELEV];
-    Tank[j].Hmin = (elev + minlvl) / Ucf[ELEV];
-    Tank[j].Hmax = (elev + maxlvl) / Ucf[ELEV];
+    if (curveIndex == 0)
+        Tank[j].A = PI * SQR(diam / Ucf[ELEV]) / 4.0;
+    else
+        Tank[j].A = area / Ucf[ELEV] / Ucf[ELEV];
+    Tank[j].H0 = net->Node[Tank[j].Node].El + initlvl / Ucf[ELEV];
+    Tank[j].Hmin = net->Node[Tank[j].Node].El + minlvl / Ucf[ELEV];
+    Tank[j].Hmax = net->Node[Tank[j].Node].El + maxlvl / Ucf[ELEV];
     Tank[j].Vcurve = curveIndex;
     if (curveIndex == 0)
     {
-        if (minvol > 0.0) Tank[j].Vmin = minvol / Ucf[VOLUME];
-        else Tank[j].Vmin = Tank[j].A * (Tank[j].Hmin - elev / Ucf[ELEV]);
+        // Compute cylindrical volumes in user units before converting them
+        // to internal units, matching the input-file parsing path.
+        minVolume = area * minlvl;
+        if (minvol > 0.0) minVolume = minvol;
+        Tank[j].Vmin = minVolume / Ucf[VOLUME];
+        Tank[j].V0 = (minVolume + area * (initlvl - minlvl)) / Ucf[VOLUME];
+        Tank[j].Vmax = (minVolume + area * (maxlvl - minlvl)) / Ucf[VOLUME];
     }
-    else Tank[j].Vmin = tankvolume(p, j, Tank[j].Hmin);
-    Tank[j].V0 = tankvolume(p, j, Tank[j].H0);
-    Tank[j].Vmax = tankvolume(p, j, Tank[j].Hmax);
+    else
+    {
+        Tank[j].Vmin = tankvolume(p, j, Tank[j].Hmin);
+        Tank[j].V0 = tankvolume(p, j, Tank[j].H0);
+        Tank[j].Vmax = tankvolume(p, j, Tank[j].Hmax);
+    }
     return 0;
 }
 
